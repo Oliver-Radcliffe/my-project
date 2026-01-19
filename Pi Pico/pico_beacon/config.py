@@ -10,6 +10,18 @@ import json
 
 DEFAULT_CONFIG = {
     # ==========================================================================
+    # TEST MODE
+    # ==========================================================================
+    # When enabled, disables features that could interfere with hardware testing:
+    # - Motion sensors disabled
+    # - Battery monitoring disabled (no low battery shutdown)
+    # - Sleep modes disabled (device stays awake)
+    # - Deployment mode disabled (uses normal rates immediately)
+    # - Watchdog disabled
+    # Set to False for production use
+    "test_mode": True,
+
+    # ==========================================================================
     # OPERATING MODE
     # ==========================================================================
     # "active" - Normal tracking mode

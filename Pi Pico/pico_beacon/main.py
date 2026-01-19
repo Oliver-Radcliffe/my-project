@@ -114,6 +114,16 @@ class PicoBeacon:
         self._rf_enabled = self.config.get("rf_enabled", True)
         self._rf_mode = self.config.get("rf_mode", "auto")
 
+        # Test mode - disables features that interfere with hardware testing
+        self._test_mode = self.config.get("test_mode", True)
+        if self._test_mode:
+            self.log.info("*** TEST MODE ENABLED ***")
+            self.log.info("  - Motion sensor: DISABLED")
+            self.log.info("  - Battery shutdown: DISABLED")
+            self.log.info("  - Sleep modes: DISABLED")
+            self.log.info("  - Deployment mode: DISABLED")
+            self.log.info("  - Watchdog: DISABLED")
+
         self.log.info(f"Serial: {self.config.get('serial_number')}")
         self.log.info(f"Server: {self.config.get('server_host')}:{self.config.get('server_port')}")
 
@@ -140,8 +150,8 @@ class PicoBeacon:
         self._motion_woke_us = False
         self._motion_timeout_start = 0
 
-        # Mode flags
-        self._deployment_mode = True  # Start in deployment mode
+        # Mode flags - deployment mode disabled in test mode
+        self._deployment_mode = not self._test_mode
         self._continuous_mode = False
         self._reboot_requested = False
         self._log_upload_requested = False
@@ -149,12 +159,15 @@ class PicoBeacon:
         # Alerts pending
         self._pending_alerts = []
 
-        # Watchdog timer
-        try:
-            self.watchdog = machine.WDT(timeout=30000)
-        except Exception:
+        # Watchdog timer - disabled in test mode
+        if self._test_mode:
             self.watchdog = None
-            self.log.warning("Watchdog not available")
+        else:
+            try:
+                self.watchdog = machine.WDT(timeout=30000)
+            except Exception:
+                self.watchdog = None
+                self.log.warning("Watchdog not available")
 
         self.log.info("Initialization complete")
 
@@ -266,6 +279,11 @@ class PicoBeacon:
 
     def _init_motion_sensor(self):
         """Initialize motion sensor."""
+        # Disabled in test mode
+        if self._test_mode:
+            self.motion_sensor = None
+            return
+
         if not self.config.get("motion_sensor_enabled", True):
             self.motion_sensor = None
             return
@@ -591,7 +609,8 @@ class PicoBeacon:
         battery_pct = self.power.get_battery_percentage()
         self.log.info(f"Battery: {battery_pct}%")
 
-        if self.power.is_battery_critical():
+        # Skip battery critical check in test mode
+        if not self._test_mode and self.power.is_battery_critical():
             self.log.error("Battery critical!")
             self.leds.error_on()
             self.state = State.ERROR
@@ -758,6 +777,12 @@ class PicoBeacon:
 
     def _state_sleep(self):
         """Sleep state between reports."""
+        # Skip sleep in test mode
+        if self._test_mode:
+            self.log.info("State: SLEEP (skipped - test mode)")
+            self.state = State.GPS_ACQUIRE
+            return
+
         self.leds.all_off()
 
         interval_ms = self._get_report_interval_ms()
@@ -771,6 +796,13 @@ class PicoBeacon:
 
     def _state_standby(self):
         """Standby mode - low power with periodic wake."""
+        # Skip standby in test mode - return to active
+        if self._test_mode:
+            self.log.info("State: STANDBY (skipped - test mode)")
+            self.config.set("operating_mode", OperatingMode.ACTIVE)
+            self.state = State.GPS_ACQUIRE
+            return
+
         self.log.info("State: STANDBY")
         self.leds.all_off()
 
@@ -805,6 +837,13 @@ class PicoBeacon:
 
     def _state_hibernate(self):
         """Hibernate mode - deep sleep with command-only wake."""
+        # Skip hibernate in test mode - return to active
+        if self._test_mode:
+            self.log.info("State: HIBERNATE (skipped - test mode)")
+            self.config.set("operating_mode", OperatingMode.ACTIVE)
+            self.state = State.GPS_ACQUIRE
+            return
+
         self.log.info("State: HIBERNATE")
         self.leds.all_off()
 
@@ -846,7 +885,8 @@ class PicoBeacon:
 
         time.sleep(5)
 
-        if not self.power.is_battery_critical():
+        # Always allow recovery in test mode (skip battery check)
+        if self._test_mode or not self.power.is_battery_critical():
             self.log.info("Attempting recovery...")
             self.retry_count = 0
             self.error_message = None
