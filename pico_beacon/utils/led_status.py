@@ -1,12 +1,28 @@
 # LED Status Indicators for Pico Beacon
 # Provides visual feedback for device state
+#
+# RAPID 2 LED Patterns:
+#   Power-on: Green 1s -> Red 1s -> Blue constant
+#   GPS acquiring: Cyan (Green + Blue)
+#   GPS has fix: Purple (Red + Blue)
+#   Connected: Blue solid
+#   Transmitting: Blue flash
+#   Error: Red solid/flash
 
 from machine import Pin, Timer
 import time
 
 
 class StatusLED:
-    """Controls status LEDs for visual feedback."""
+    """Controls status LEDs for visual feedback.
+
+    RAPID 2 LED color combinations:
+    - Green (GP15): GPS indicator
+    - Blue (GP16): Network indicator
+    - Red (GP17): Error indicator
+    - Cyan: Green + Blue (GPS acquiring)
+    - Purple: Red + Blue (GPS fix)
+    """
 
     def __init__(self, gps_pin=15, network_pin=16, error_pin=17, onboard_pin=25):
         """Initialize status LEDs.
@@ -17,9 +33,9 @@ class StatusLED:
             error_pin: GPIO pin for error LED (red)
             onboard_pin: GPIO pin for onboard LED (Pico = 25, Pico W = "LED")
         """
-        self.led_gps = Pin(gps_pin, Pin.OUT) if gps_pin else None
-        self.led_network = Pin(network_pin, Pin.OUT) if network_pin else None
-        self.led_error = Pin(error_pin, Pin.OUT) if error_pin else None
+        self.led_gps = Pin(gps_pin, Pin.OUT) if gps_pin else None      # Green
+        self.led_network = Pin(network_pin, Pin.OUT) if network_pin else None  # Blue
+        self.led_error = Pin(error_pin, Pin.OUT) if error_pin else None  # Red
 
         # Handle Pico W's different LED setup
         try:
@@ -34,6 +50,7 @@ class StatusLED:
         self._blink_timer = None
         self._blink_led = None
         self._blink_state = False
+        self._multi_blink_leds = []
 
         # Turn all LEDs off initially
         self.all_off()
@@ -149,6 +166,74 @@ class StatusLED:
             self.all_off()
             time.sleep_ms(200)
 
+    def rapid2_startup_sequence(self):
+        """RAPID 2 power-on LED sequence.
+
+        Sequence: Green 1s -> Red 1s -> Blue constant
+        This indicates normal power-up and system initialization.
+        """
+        self.all_off()
+
+        # Green for 1 second
+        self._set_led(self.led_gps, True)
+        time.sleep(1)
+        self._set_led(self.led_gps, False)
+
+        # Red for 1 second
+        self._set_led(self.led_error, True)
+        time.sleep(1)
+        self._set_led(self.led_error, False)
+
+        # Blue constant (indicates system ready)
+        self._set_led(self.led_network, True)
+
+    def set_cyan(self):
+        """Set LEDs to cyan (green + blue).
+
+        RAPID 2: Indicates GPS acquiring satellites.
+        """
+        self._stop_blink()
+        self._set_led(self.led_gps, True)      # Green
+        self._set_led(self.led_network, True)  # Blue
+        self._set_led(self.led_error, False)   # Red off
+
+    def set_purple(self):
+        """Set LEDs to purple (red + blue).
+
+        RAPID 2: Indicates GPS has fix.
+        """
+        self._stop_blink()
+        self._set_led(self.led_gps, False)     # Green off
+        self._set_led(self.led_network, True)  # Blue
+        self._set_led(self.led_error, True)    # Red
+
+    def blink_cyan(self, period_ms=500):
+        """Blink cyan (green + blue together).
+
+        RAPID 2: Indicates GPS acquiring with periodic flash.
+        """
+        self._multi_blink_leds = [self.led_gps, self.led_network]
+        self._start_multi_blink(period_ms)
+
+    def _start_multi_blink(self, period_ms=500):
+        """Start blinking multiple LEDs together."""
+        self._stop_blink()
+        if self._multi_blink_leds:
+            self._blink_state = False
+            self._blink_timer = Timer()
+            self._blink_timer.init(
+                period=period_ms // 2,
+                mode=Timer.PERIODIC,
+                callback=self._multi_blink_callback
+            )
+
+    def _multi_blink_callback(self, timer):
+        """Timer callback for blinking multiple LEDs."""
+        self._blink_state = not self._blink_state
+        for led in self._multi_blink_leds:
+            if led:
+                led.value(1 if self._blink_state else 0)
+
     def indicate_transmit(self):
         """Flash to indicate transmission."""
         if self.led_network:
@@ -174,29 +259,60 @@ class StatusLED:
     def update_gps_status(self, has_fix, acquiring=False):
         """Update GPS LED based on status.
 
+        RAPID 2 patterns:
+        - Acquiring: Cyan (green + blue)
+        - Has fix: Purple (red + blue)
+        - No GPS: All off
+
         Args:
             has_fix: True if GPS has a fix
             acquiring: True if currently acquiring satellites
         """
         self._stop_blink()
+        self._multi_blink_leds = []
+
         if has_fix:
-            self.gps_on()
+            # Purple = GPS has fix
+            self.set_purple()
         elif acquiring:
-            self.gps_blink()
+            # Cyan = GPS acquiring
+            self.set_cyan()
         else:
-            self.gps_off()
+            # No GPS activity
+            self._set_led(self.led_gps, False)
+            self._set_led(self.led_error, False)
 
     def update_network_status(self, connected, connecting=False):
         """Update network LED based on status.
+
+        RAPID 2 patterns:
+        - Connected: Blue solid
+        - Connecting: Blue blink
+        - Disconnected: Blue off
 
         Args:
             connected: True if connected to network
             connecting: True if currently connecting
         """
-        self._stop_blink()
+        # Don't stop GPS-related LED states
+        if self._blink_timer and self._multi_blink_leds:
+            return  # GPS is using the LEDs
+
         if connected:
-            self.network_on()
+            self._set_led(self.led_network, True)
         elif connecting:
-            self.network_blink()
+            self._start_blink(self.led_network)
         else:
-            self.network_off()
+            self._set_led(self.led_network, False)
+
+    def indicate_standby(self):
+        """Indicate standby mode - all LEDs off except brief flash."""
+        self.all_off()
+
+    def indicate_hibernate(self):
+        """Indicate hibernate mode - all LEDs off."""
+        self.all_off()
+
+    def indicate_deployment(self):
+        """Indicate deployment mode - rapid blue flash."""
+        self._start_blink(self.led_network, period_ms=200)
