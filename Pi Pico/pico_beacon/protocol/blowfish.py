@@ -325,8 +325,77 @@ class Blowfish:
             pos += 8
 
 
+def _hmac_sha1(key, message):
+    """HMAC-SHA1 implementation for MicroPython.
+
+    Args:
+        key: bytes key
+        message: bytes message
+
+    Returns:
+        20-byte HMAC digest
+    """
+    import hashlib
+
+    block_size = 64  # SHA1 block size
+
+    # If key is longer than block size, hash it
+    if len(key) > block_size:
+        key = hashlib.sha1(key).digest()
+
+    # Pad key to block size
+    if len(key) < block_size:
+        key = key + b'\x00' * (block_size - len(key))
+
+    # Create inner and outer padding
+    o_key_pad = bytes([k ^ 0x5c for k in key])
+    i_key_pad = bytes([k ^ 0x36 for k in key])
+
+    # Inner hash
+    inner = hashlib.sha1(i_key_pad + message).digest()
+
+    # Outer hash
+    return hashlib.sha1(o_key_pad + inner).digest()
+
+
+def _pbkdf2_sha1(password, salt, iterations, dklen):
+    """PBKDF2-HMAC-SHA1 implementation for MicroPython.
+
+    Args:
+        password: bytes password
+        salt: bytes salt
+        iterations: iteration count
+        dklen: desired key length
+
+    Returns:
+        derived key bytes
+    """
+    hash_len = 20  # SHA1 produces 20 bytes
+    blocks_needed = (dklen + hash_len - 1) // hash_len
+
+    dk = b''
+
+    for block_num in range(1, blocks_needed + 1):
+        # First iteration: U1 = PRF(Password, Salt || INT(i))
+        block_bytes = block_num.to_bytes(4, 'big')
+        u = _hmac_sha1(password, salt + block_bytes)
+        result = u
+
+        # Subsequent iterations
+        for _ in range(iterations - 1):
+            u = _hmac_sha1(password, u)
+            # XOR with previous result
+            result = bytes([a ^ b for a, b in zip(result, u)])
+
+        dk += result
+
+    return dk[:dklen]
+
+
 def derive_key(passphrase, salt=None, iterations=1000):
     """Derive encryption key from passphrase using PBKDF2-HMAC-SHA1.
+
+    MicroPython compatible implementation.
 
     Args:
         passphrase: string or bytes passphrase
@@ -336,12 +405,10 @@ def derive_key(passphrase, salt=None, iterations=1000):
     Returns:
         32-byte key as bytes
     """
-    import hashlib
-
     if salt is None:
         salt = bytes([0x74, 0xC4, 0x89, 0x4C, 0x4F, 0x38, 0xFF, 0xCC])
 
     if isinstance(passphrase, str):
         passphrase = passphrase.encode('utf-8')
 
-    return hashlib.pbkdf2_hmac('sha1', passphrase, salt, iterations, KEY_LEN)
+    return _pbkdf2_sha1(passphrase, salt, iterations, KEY_LEN)
