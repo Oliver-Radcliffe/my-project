@@ -113,14 +113,20 @@ DEFAULT_CONFIG = {
     # ==========================================================================
     # NETWORK SETTINGS
     # ==========================================================================
-    "network_type": "wifi",            # "wifi" or "cellular"
+    "network_type": "sim7080g",        # "wifi", "cellular", or "sim7080g"
     "wifi_ssid": "",                   # WiFi SSID (Pico W only)
     "wifi_password": "",               # WiFi password
     "cellular_apn": "internet",        # Cellular APN
     "cellular_user": "",               # APN username
     "cellular_pass": "",               # APN password
     "connection_retry_count": 3,       # Retries before fallback
-    "connection_timeout_sec": 30,      # Connection timeout
+    "connection_timeout_sec": 120,     # Connection timeout (longer for Cat-M/NB-IoT)
+
+    # ==========================================================================
+    # SIM7080G SETTINGS (Waveshare Pico-SIM7080G board)
+    # ==========================================================================
+    "sim7080g_use_udp": True,          # Use UDP (recommended - TCP doesn't work with GNSS)
+    "sim7080g_network_mode": 3,        # 1=Cat-M, 2=NB-IoT, 3=Both (auto)
 
     # ==========================================================================
     # REMOTE COMMANDS (RAPID 2 GPRS Commands)
@@ -223,23 +229,30 @@ class AlertType:
 # ==============================================================================
 
 class Pins:
-    # GPS Module (UART0)
+    # SIM7080G Module (Waveshare Pico-SIM7080G board)
+    # Uses UART0 for AT commands (cellular + GNSS integrated)
+    SIM7080G_TX = 0      # GP0 -> SIM7080G RX
+    SIM7080G_RX = 1      # GP1 -> SIM7080G TX
+    SIM7080G_PWR = 14    # GP14 -> SIM7080G Power Key
+    SIM7080G_UART_ID = 0
+
+    # Legacy GPS Module pins (for standalone GPS, not used with SIM7080G)
     GPS_TX = 0   # GP0 -> GPS RX
     GPS_RX = 1   # GP1 -> GPS TX
 
-    # Cellular Module (UART1)
+    # Legacy Cellular Module (UART1) - for SIM7600/SIM800L
     CELL_TX = 4   # GP4 -> SIM TX
     CELL_RX = 5   # GP5 -> SIM RX
     CELL_PWR = 6  # GP6 -> SIM Power Key
     CELL_STATUS = 7  # GP7 -> SIM Status
 
-    # Status LEDs
+    # Status LEDs (directly on Pico or external)
     LED_GPS = 15      # Green - GPS fix status
     LED_NETWORK = 16  # Blue - Network status
     LED_ERROR = 17    # Red - Error indicator
     LED_ONBOARD = "LED"  # Onboard LED (Pico W)
 
-    # I/O Pins
+    # I/O Pins (directly on Pico)
     INPUT_PIN = 18         # External input
     OUTPUT_PIN = 19        # External output (open drain)
 
@@ -256,7 +269,7 @@ class Pins:
     I2C_SCL = 21
 
     # Power Control
-    GPS_ENABLE = 28        # GPS module power enable
+    GPS_ENABLE = 28        # GPS module power enable (not used with SIM7080G)
 
 
 # ==============================================================================
@@ -290,6 +303,8 @@ class UART:
     GPS_UART_ID = 0
     CELL_BAUDRATE = 115200
     CELL_UART_ID = 1
+    SIM7080G_BAUDRATE = 115200
+    SIM7080G_UART_ID = 0
 
 
 # ==============================================================================

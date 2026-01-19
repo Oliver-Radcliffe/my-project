@@ -17,6 +17,82 @@ import machine
 from config import ConfigManager, Pins, State, Timing, OperatingMode, AlertType
 
 
+class SIM7080GGPSWrapper:
+    """Wrapper to provide GPS-compatible interface for SIM7080G integrated GNSS."""
+
+    def __init__(self, sim7080g):
+        """Initialize wrapper with SIM7080G driver instance."""
+        self._modem = sim7080g
+
+    @property
+    def latitude(self):
+        return self._modem.latitude
+
+    @property
+    def longitude(self):
+        return self._modem.longitude
+
+    @property
+    def altitude(self):
+        return self._modem.altitude
+
+    @property
+    def speed_kmh(self):
+        return self._modem.speed_kmh
+
+    @property
+    def heading(self):
+        return self._modem.heading
+
+    @property
+    def hdop(self):
+        return self._modem.hdop
+
+    @property
+    def satellites(self):
+        return self._modem.satellites
+
+    @property
+    def valid(self):
+        return self._modem.gnss_valid
+
+    @property
+    def year(self):
+        return self._modem.year
+
+    @property
+    def month(self):
+        return self._modem.month
+
+    @property
+    def day(self):
+        return self._modem.day
+
+    @property
+    def hour(self):
+        return self._modem.hour
+
+    @property
+    def minute(self):
+        return self._modem.minute
+
+    @property
+    def second(self):
+        return self._modem.second
+
+    def update(self):
+        """Update GPS data from modem."""
+        return self._modem.gnss_update()
+
+    def get_position(self):
+        """Get current position data."""
+        return self._modem.get_position()
+
+    def wait_for_fix(self, timeout_sec=120, callback=None):
+        """Wait for GPS fix."""
+        return self._modem.gnss_wait_for_fix(timeout_sec, callback)
+
+
 class PicoBeacon:
     """Main beacon application with RAPID 2 state machine."""
 
@@ -105,6 +181,14 @@ class PicoBeacon:
 
     def _init_gps(self):
         """Initialize GPS driver."""
+        network_type = self.config.get("network_type", "wifi")
+
+        # SIM7080G has integrated GNSS - GPS is handled by the modem driver
+        if network_type == "sim7080g":
+            self.gps = None  # GPS will be provided by SIM7080G modem
+            self.log.info("Using SIM7080G integrated GNSS")
+            return
+
         from drivers.gps_driver import GPSDriver
         self.gps = GPSDriver(
             uart_id=0,
@@ -117,7 +201,20 @@ class PicoBeacon:
         """Initialize network driver."""
         network_type = self.config.get("network_type", "wifi")
 
-        if network_type == "cellular":
+        if network_type == "sim7080g":
+            from drivers.sim7080g import SIM7080G
+            self.log.info("Using SIM7080G Cat-M/NB-IoT")
+            self.network = SIM7080G(
+                uart_id=Pins.SIM7080G_UART_ID,
+                tx_pin=Pins.SIM7080G_TX,
+                rx_pin=Pins.SIM7080G_RX,
+                pwr_pin=Pins.SIM7080G_PWR,
+                apn=self.config.get("cellular_apn", "internet")
+            )
+            # SIM7080G provides integrated GNSS - create wrapper for GPS interface
+            self.gps = SIM7080GGPSWrapper(self.network)
+            self._use_udp = self.config.get("sim7080g_use_udp", True)
+        elif network_type == "cellular":
             from drivers.network_cellular import CellularDriver
             self.log.info("Using cellular network")
             self.network = CellularDriver(
@@ -129,6 +226,7 @@ class PicoBeacon:
                 user=self.config.get("cellular_user", ""),
                 password=self.config.get("cellular_pass", "")
             )
+            self._use_udp = False
         else:
             from drivers.network_wifi import WiFiDriver
             self.log.info("Using WiFi network")
@@ -136,6 +234,7 @@ class PicoBeacon:
                 ssid=self.config.get("wifi_ssid"),
                 password=self.config.get("wifi_password")
             )
+            self._use_udp = False
 
     def _init_protocol(self):
         """Initialize ciNet protocol handler."""
@@ -509,8 +608,13 @@ class PicoBeacon:
 
         # Power on cellular if needed
         if hasattr(self.network, 'power_on'):
-            self.log.info("Powering on cellular...")
+            self.log.info("Powering on modem...")
             self.network.power_on()
+
+        # Start GNSS for SIM7080G (integrated GPS)
+        if hasattr(self.network, 'gnss_start'):
+            self.log.info("Starting GNSS...")
+            self.network.gnss_start()
 
         self.state = State.GPS_ACQUIRE
 
@@ -546,12 +650,15 @@ class PicoBeacon:
             self.state = State.READY
             return
 
-        if self.network.connect(timeout_sec=30):
+        # Use configured timeout (longer for Cat-M/NB-IoT)
+        timeout = self.config.get("connection_timeout_sec", 120)
+        if self.network.connect(timeout_sec=timeout):
             self.log.info(f"Connected: {self.network.get_ip_address()}")
             self.leds.update_network_status(connected=True)
             self.state = State.READY
         else:
-            self.log.error(f"Connect failed: {self.network.last_error}")
+            error = getattr(self.network, 'last_error', None) or getattr(self.network, '_last_error', 'Unknown')
+            self.log.error(f"Connect failed: {error}")
             self.retry_count += 1
 
             if self.retry_count >= Timing.MAX_RETRIES:
@@ -627,13 +734,20 @@ class PicoBeacon:
 
         self.leds.indicate_transmit()
 
-        if self.network.send_tcp(host, port, message, timeout_ms=Timing.NETWORK_TIMEOUT_MS):
+        # Use UDP for SIM7080G (TCP doesn't work with GNSS active)
+        if getattr(self, '_use_udp', False) and hasattr(self.network, 'send_udp'):
+            success = self.network.send_udp(host, port, message)
+        else:
+            success = self.network.send_tcp(host, port, message, timeout_ms=Timing.NETWORK_TIMEOUT_MS)
+
+        if success:
             self.log.info("Transmit OK")
             self.last_transmit_time = time.ticks_ms()
             self.retry_count = 0
             self.state = State.READY
         else:
-            self.log.error(f"Transmit failed: {self.network.last_error}")
+            error = getattr(self.network, 'last_error', None) or getattr(self.network, '_last_error', 'Unknown')
+            self.log.error(f"Transmit failed: {error}")
             self.retry_count += 1
 
             if self.retry_count >= Timing.MAX_RETRIES:
