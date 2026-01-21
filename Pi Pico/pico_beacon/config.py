@@ -141,6 +141,19 @@ DEFAULT_CONFIG = {
     "sim7080g_network_mode": 3,        # 1=Cat-M, 2=NB-IoT, 3=Both (auto)
 
     # ==========================================================================
+    # GPS SOURCE SETTINGS
+    # ==========================================================================
+    # When True, use an external GPS module (NEO-6M, NEO-M8N, etc.) connected
+    # via UART instead of the integrated GNSS in the SIM7080G modem.
+    # This is useful if the integrated GNSS has poor reception.
+    # External GPS uses UART1 (GP4=TX, GP5=RX) at 9600 baud by default.
+    "use_external_gps": False,
+    "external_gps_uart_id": 1,         # UART ID for external GPS (0 or 1)
+    "external_gps_tx_pin": 4,          # TX pin (Pico -> GPS RX)
+    "external_gps_rx_pin": 5,          # RX pin (GPS TX -> Pico)
+    "external_gps_baudrate": 9600,     # GPS module baudrate
+
+    # ==========================================================================
     # REMOTE COMMANDS (RAPID 2 GPRS Commands)
     # ==========================================================================
     "remote_commands_enabled": True,   # Allow remote commands
@@ -251,6 +264,12 @@ class Pins:
     # Legacy GPS Module pins (for standalone GPS, not used with SIM7080G)
     GPS_TX = 0   # GP0 -> GPS RX
     GPS_RX = 1   # GP1 -> GPS TX
+
+    # External GPS Module pins (when using SIM7080G with external GPS)
+    # Uses UART1 to avoid conflict with SIM7080G on UART0
+    EXT_GPS_TX = 4   # GP4 -> External GPS RX
+    EXT_GPS_RX = 5   # GP5 -> External GPS TX
+    EXT_GPS_UART_ID = 1
 
     # Legacy Cellular Module (UART1) - for SIM7600/SIM800L
     CELL_TX = 4   # GP4 -> SIM TX

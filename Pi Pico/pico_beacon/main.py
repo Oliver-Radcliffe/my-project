@@ -195,19 +195,37 @@ class PicoBeacon:
     def _init_gps(self):
         """Initialize GPS driver."""
         network_type = self.config.get("network_type", "wifi")
+        use_external_gps = self.config.get("use_external_gps", False)
 
         # SIM7080G has integrated GNSS - GPS is handled by the modem driver
-        if network_type == "sim7080g":
+        # Unless use_external_gps is True, in which case we use an external module
+        if network_type == "sim7080g" and not use_external_gps:
             self.gps = None  # GPS will be provided by SIM7080G modem
             self.log.info("Using SIM7080G integrated GNSS")
             return
 
+        # Use external GPS module
         from drivers.gps_driver import GPSDriver
+
+        if use_external_gps:
+            # Use configurable pins for external GPS (separate from modem UART)
+            uart_id = self.config.get("external_gps_uart_id", 1)
+            tx_pin = self.config.get("external_gps_tx_pin", 4)
+            rx_pin = self.config.get("external_gps_rx_pin", 5)
+            baudrate = self.config.get("external_gps_baudrate", 9600)
+            self.log.info(f"Using external GPS on UART{uart_id} (TX={tx_pin}, RX={rx_pin})")
+        else:
+            # Default GPS pins (when not using SIM7080G)
+            uart_id = 0
+            tx_pin = Pins.GPS_TX
+            rx_pin = Pins.GPS_RX
+            baudrate = 9600
+
         self.gps = GPSDriver(
-            uart_id=0,
-            tx_pin=Pins.GPS_TX,
-            rx_pin=Pins.GPS_RX,
-            baudrate=9600
+            uart_id=uart_id,
+            tx_pin=tx_pin,
+            rx_pin=rx_pin,
+            baudrate=baudrate
         )
 
     def _init_network(self):
@@ -224,8 +242,13 @@ class PicoBeacon:
                 pwr_pin=Pins.SIM7080G_PWR,
                 apn=self.config.get("cellular_apn", "internet")
             )
-            # SIM7080G provides integrated GNSS - create wrapper for GPS interface
-            self.gps = SIM7080GGPSWrapper(self.network)
+            # Only use integrated GNSS if not using external GPS
+            use_external_gps = self.config.get("use_external_gps", False)
+            if not use_external_gps:
+                # SIM7080G provides integrated GNSS - create wrapper for GPS interface
+                self.gps = SIM7080GGPSWrapper(self.network)
+            else:
+                self.log.info("External GPS enabled - not using SIM7080G GNSS")
             self._use_udp = self.config.get("sim7080g_use_udp", True)
         elif network_type == "cellular":
             from drivers.network_cellular import CellularDriver
@@ -630,9 +653,10 @@ class PicoBeacon:
             self.log.info("Powering on modem...")
             self.network.power_on()
 
-        # Start GNSS for SIM7080G (integrated GPS)
-        if hasattr(self.network, 'gnss_start'):
-            self.log.info("Starting GNSS...")
+        # Start GNSS for SIM7080G (integrated GPS) only if not using external GPS
+        use_external_gps = self.config.get("use_external_gps", False)
+        if hasattr(self.network, 'gnss_start') and not use_external_gps:
+            self.log.info("Starting integrated GNSS...")
             self.network.gnss_start()
 
         self.state = State.GPS_ACQUIRE
